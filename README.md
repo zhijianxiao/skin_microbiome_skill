@@ -1,111 +1,114 @@
-# Skin Microbiome Skill
+# Skin Microbiome Skill · 皮肤微生物组文献检索工具
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![bioSkills](https://img.shields.io/badge/patterns-bioSkills-orange)](https://github.com/GPTomics/bioSkills)
 
-**Non-human skin microbiome literature search tool.**
+**非人类皮肤微生物组文献检索与宏基因组数据集定位工具。**
 
-Enter a species name (Chinese or English) — the skill searches PubMed for skin microbiome studies on that animal host, filters out human research, extracts metagenomic BioProject IDs, identifies anatomical sampling sites from abstracts, and exports everything to a formatted Excel file.
-
----
-
-## How It Works
-
-```
-User Input                  PubMed                     ENA                      Output
-───────────              ───────────               ───────────               ──────────
- Species name                                                           ┌─────────────────┐
-  ↓                        ┌──────────┐            ┌──────────┐         │  文献标题        │
- SpeciesManager            │ Search   │            │ ENAClient│         │  作者            │
- .normalize()              │ Engine   │            │          │         │  年份            │
-  ↓                        │          │            │ Resolve  │         │  DOI             │
- Latin name                │ PubMed   │──BioProj──→│ PRJNAxxx │         │  实验物种         │
-  ↓                        │ query:   │            │ PRJEBxxx │         │  宏基因组数据集    │
- PubMed query              │ (skin    │            │          │         │  取样部位         │
-  ↓                        │  microbi │            └──────────┘         └─────────────────┘
- Articles ───2nd filter──→ │  ome)    │                                        Excel
- (non-human, skin-related) │ AND      │
-                            │ (Equus)  │
- Sampling site extraction   │ NOT human│
-                            └──────────┘
-```
-
-1. **Species normalization** — Chinese or English name → English common name → Latin scientific name
-2. **PubMed query construction** — `("skin microbiome" OR "cutaneous microbiota" OR "dermal microbiome") AND ("{species}") NOT human`
-3. **Secondary filtering** — excludes articles mentioning human patients/volunteers; requires skin-related terms in title or abstract
-4. **Sampling site extraction** — 40+ regex patterns identify anatomical sites (ear, nose, paw, tail, hoof, wing, fin, etc.) from abstracts
-5. **BioProject resolution** — extracts PRJNAxxx / PRJEBxxx metagenomic dataset IDs and resolves descriptions via ENA API
-6. **Excel export** — 7 fixed columns with auto-filter, freeze panes; missing values marked `N/A`
+输入一个物种名（中文或英文），自动检索 PubMed 中该动物宿主的皮肤微生物组研究文献，过滤掉人类研究，通过 NCBI ELink 跨数据库导航自动发现关联的宏基因组 BioProject 数据集，从摘要中提取取样部位，最终导出为格式化的 Excel 文件。
 
 ---
 
-## Installation
+## 工作流程
 
-### Prerequisites
+```
+用户输入                    NCBI Entrez                    ELink 跨库导航              输出
+───────────              ───────────────               ────────────────          ──────────────
+ 物种名                                                        ┌─────────────────────────────┐
+  ↓                      ┌──────────────┐                    │  文献标题                     │
+ SpeciesManager          │ SearchEngine │    ELink           │  作者                         │
+ ├─ 本地缓存匹配           │              │  PubMed→BioProject │  年份                         │
+ └─ NCBI Taxonomy API    │ PubMed 查询   │─────PRJNAxxx─────→│  DOI                          │
+  ↓                      │ 字段标签语法   │  PubMed→SRA       │  实验物种（拉丁名）             │
+ 拉丁学名                  │ NOT human    │─────SRRxxxxxx────→│  宏基因组数据集（PRJNA/PRJEB）   │
+  ↓                      │ [mesh]        │                    │  取样部位                      │
+ PubMed 检索式             │              │  ESummary         └─────────────────────────────┘
+  ↓                      └──────────────┘  元数据解析                     Excel
+ 文献列表                                                           （自动筛选 + 冻结首行）
+  ↓
+ 二次过滤（非人类 + 皮肤相关）
+  ↓
+ 取样部位提取（40+ 正则模式）
+```
 
-- **Conda** (Miniconda or Anaconda) — required by install scripts
-- **Python ≥ 3.9** — included in Conda environment
-- **NCBI email** — required by PubMed API; [register here](https://www.ncbi.nlm.nih.gov/account/) if you don't have one
-- **NCBI API key** (optional) — increases rate limit from 3 to 10 requests/sec
+### 核心技术栈（参考 bioSkills 模式）
+
+| 步骤 | 使用的 NCBI Entrez 工具 | 参考的 bioSkills 模块 |
+|------|------------------------|---------------------|
+| 物种标准化 | `esearch(db='taxonomy')` + `esummary` | entrez-search / entrez-fetch |
+| 文献检索 | `esearch(db='pubmed')` 字段标签语法 | entrez-search |
+| 文献获取 | `efetch(rettype='medline', retmode='xml')` | entrez-fetch |
+| 跨库导航 | `elink(dbfrom='pubmed', db='bioproject')` | **entrez-link** |
+| SRA 关联 | `elink(dbfrom='pubmed', db='sra')` | entrez-link / sra-data |
+| 元数据解析 | `esummary(db='bioproject')` | entrez-fetch |
+
+---
+
+## 安装
+
+### 前置要求
+
+- **Conda**（Miniconda 或 Anaconda）
+- **Python ≥ 3.9**
+- **NCBI 邮箱**（PubMed API 强制要求，[注册地址](https://www.ncbi.nlm.nih.gov/account/)）
+- **NCBI API Key**（可选，将速率限制从 3 次/秒提升到 10 次/秒）
 
 ### Linux / macOS
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/skin_microbiome_skill.git
+# 1. 克隆仓库
+git clone https://github.com/zhijianxiao/skin_microbiome_skill.git
 cd skin_microbiome_skill
 
-# 2. Run the install script (creates Conda env + installs dependencies)
+# 2. 运行安装脚本（创建 Conda 环境 + 安装依赖）
 bash scripts/install.sh
 
-# 3. Activate the environment
+# 3. 激活环境
 conda activate skin_microbiome
 
-# 4. Edit your NCBI email in config.yaml
-#    Replace user@example.com with your email
+# 4. 编辑 config.yaml，填入你的 NCBI 邮箱
+#    将 user@example.com 替换为你的真实邮箱
 
-# 5. Verify
+# 5. 验证安装
 skin-microbiome
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-# 1. Clone the repository
-git clone https://github.com/your-org/skin_microbiome_skill.git
+# 1. 克隆仓库
+git clone https://github.com/zhijianxiao/skin_microbiome_skill.git
 cd skin_microbiome_skill
 
-# 2. Run the install script
+# 2. 运行安装脚本
 .\scripts\install.ps1
 
-# 3. Activate the environment
+# 3. 激活环境
 conda activate skin_microbiome
 
-# 4. Edit your NCBI email in config.yaml
-#    Replace user@example.com with your email
+# 4. 编辑 config.yaml，填入你的 NCBI 邮箱
 
-# 5. Verify
+# 5. 验证安装
 skin-microbiome
 ```
 
-### Manual Installation (without Conda)
+### 手动安装（不使用 Conda）
 
 ```bash
-# Create a virtual environment
 python -m venv venv
 source venv/bin/activate        # Linux / macOS
 # .\venv\Scripts\Activate.ps1   # Windows PowerShell
 
-# Install dependencies
 pip install -r requirements.txt
 pip install -e .
 ```
 
 ---
 
-## Quick Start
+## 快速开始
 
-### Interactive Mode
+### 交互模式
 
 ```bash
 $ skin-microbiome
@@ -115,16 +118,17 @@ $ skin-microbiome
 ============================================================
   Non-Human Skin Microbiome Literature Search
   Platform: linux
+  Methods: NCBI Entrez + ELink (bioSkills patterns)
 ============================================================
 
-  Species name (Chinese or English, e.g. 马 / mouse): 马
+  Species name (Chinese/English, e.g. 马 / mouse): 马
 
-  Normalized: 马 → Horse → Equus caballus
+  Species: 马 → Horse → Equus caballus  (taxon=9796)
 
   Extra keywords (optional, Enter to skip):
 
   Searching PubMed (max 100)…
-  Query: (skin microbiome) AND (Equus caballus) NOT human
+  Query: field-tagged, NOT human[mesh], ELink → BioProject / SRA
   → 23 articles after non-human skin filter.
 
 ────────────────────────────────────────────────────────────
@@ -140,8 +144,8 @@ $ skin-microbiome
   Options: [Enter] continue  [r] refine keywords  [q] quit
   >
 
-  Resolving metagenomic BioProject IDs…
-  BioProjects found in 8/23 articles.
+  Resolving BioProject metadata (ESummary pattern)…
+  BioProjects found via ELink in 8/23 articles.
 
   Export format:
     [1] Excel (.xlsx) — default
@@ -153,14 +157,14 @@ $ skin-microbiome
   Exported to: ./output/Equus_caballus_20260520_143022.xlsx
 ```
 
-### Scripting (Non-interactive)
+### 脚本调用（非交互式）
 
 ```python
 from skill import SkinMicrobiomeSkill
 
 skill = SkinMicrobiomeSkill(config_path="config.yaml")
 
-# One-liner: search + filter + export
+# 一行完成：检索 + 过滤 + 导出
 articles = skill.run_pipeline(
     species="鼠",
     extra_keywords="atopic dermatitis",
@@ -168,52 +172,52 @@ articles = skill.run_pipeline(
     export_format="xlsx",
 )
 
-# Inspect results
+# 查看结果
 for art in articles:
     print(f"[{art['sampling_site']}] {art['title'][:60]}...")
 ```
 
-### CLI Commands
+### CLI 命令
 
 ```bash
-# List all supported species
+# 列出所有支持的物种
 skin-microbiome list-species
 
-# Search from command line
+# 命令行检索
 skin-microbiome search 马
 skin-microbiome search mouse "atopic dermatitis"
 ```
 
 ---
 
-## Output Format
+## 输出格式
 
-The Excel file contains exactly **7 columns**:
+Excel 文件包含固定的 **7 列**：
 
-| Column | Example Value | Notes |
-|--------|--------------|-------|
-| 文献标题 | Characterization of the equine skin microbiome in healthy horses | Full PubMed title |
-| 作者 | Smith J; Brown A | Semicolon-separated, max 10 shown |
-| 年份 | 2025 | Publication year |
-| DOI | 10.1111/vde.13001 | `N/A` if not available |
-| 实验物种 | Equus caballus | Latin name from species.py |
-| 宏基因组数据集 | PRJNA123456; PRJEB998877 | Semicolon-separated BioProjects, or `N/A` |
-| 取样部位 | Ear | Anatomical site from abstract, or `N/A` |
+| 列名 | 示例值 | 说明 |
+|------|--------|------|
+| 文献标题 | Characterization of the equine skin microbiome in healthy horses | PubMed 完整标题 |
+| 作者 | Smith J; Brown A | 分号分隔，最多显示 10 人 |
+| 年份 | 2025 | 出版年份 |
+| DOI | 10.1111/vde.13001 | 无 DOI 时填 `N/A` |
+| 实验物种 | Equus caballus | species.py 标准化后的拉丁学名 |
+| 宏基因组数据集 | PRJNA123456; PRJEB998877 | 通过 ELink 自动发现的 BioProject ID，无则填 `N/A` |
+| 取样部位 | Ear | 从摘要中提取的解剖部位，无法识别填 `N/A` |
 
-Features of the output Excel:
-- **Auto-filter** on all columns — sort/filter by species, year, sampling site, etc.
-- **Frozen header row** — always visible when scrolling
-- **Text wrapping** on the title column
-- **`N/A` placeholder** for all missing data — no empty cells
+输出 Excel 特性：
+- **自动筛选** — 所有列支持排序和筛选
+- **冻结首行** — 滚动时表头始终可见
+- **标题列自动换行**
+- **缺失值统一标记 `N/A`** — 无空白单元格
 
 ---
 
-## Supported Species
+## 支持的物种
 
-### Non-human Animals
+### 非人类动物（本地数据库）
 
-| Chinese | English | Latin | NCBI Taxon |
-|---------|---------|-------|------------|
+| 中文名 | 英文名 | 拉丁学名 | NCBI Taxon ID |
+|--------|--------|----------|---------------|
 | 马 | Horse | Equus caballus | 9796 |
 | 鼠 / 小鼠 | Mouse | Mus musculus | 10090 |
 | 大鼠 | Rat | Rattus norvegicus | 10116 |
@@ -230,132 +234,158 @@ Features of the output Excel:
 | 鸡 | Chicken | Gallus gallus domesticus | 9031 |
 | 猴 / 恒河猴 | Rhesus macaque | Macaca mulatta | 9544 |
 
-> Missing a species? Edit `_SPECIES_DB` in `skill/species.py` and submit a PR.
+> **动态查找**：如果物种不在本地数据库中，Skill 会自动调用 NCBI Taxonomy API（`esearch` + `esummary`）进行在线查找。任何 NCBI 收录的物种都可以检索。
 
 ---
 
-## Configuration
+## 配置
 
-Edit `config.yaml` before first use:
+首次使用前编辑 `config.yaml`：
 
 ```yaml
+# PubMed / NCBI Entrez 设置
 search:
   max_results: 100
   timeout: 30
-  email: "your-email@example.com"   # REQUIRED — NCBI Entrez requires this
-  api_key: ""                       # Optional — get one at https://account.ncbi.nlm.nih.gov/
+  email: "your-email@example.com"   # 必填 — 替换为你的 NCBI 注册邮箱
+  api_key: ""                       # 可选 — 在 https://account.ncbi.nlm.nih.gov/ 获取
 
+# ENA 浏览器 API
 ena:
   base_url: "https://www.ebi.ac.uk/ena/browser/api"
 
+# 输出设置
 export:
   default_format: "xlsx"
-  output_dir: "./output"            # Directory for exported files
+  output_dir: "./output"            # 导出文件存放目录
 ```
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
 skin_microbiome_skill/
-├── README.md
-├── LICENSE
-├── config.yaml              # NCBI email, ENA URL, export settings
-├── pyproject.toml
-├── setup.py
-├── requirements.txt
-├── skill/                   # Core Python package
-│   ├── __init__.py
-│   ├── main.py              # Orchestrator + interactive CLI
-│   ├── species.py           # Chinese/English → Latin name mapper
-│   ├── search.py            # PubMed query + filter + site extraction
-│   ├── ena.py               # BioProject resolver via ENA API
-│   └── export.py            # Excel/CSV/JSON exporter (7 columns)
+├── README.md                   # 本文件
+├── LICENSE                     # MIT 许可证
+├── .gitignore
+├── config.yaml                 # NCBI 邮箱、ENA URL、导出设置
+├── pyproject.toml              # 现代 Python 项目元数据
+├── setup.py                    # setuptools 打包配置
+├── requirements.txt            # Python 依赖
+├── skill/                      # 核心 Python 包
+│   ├── __init__.py             # 包入口，v0.3.0
+│   ├── main.py                 # 主控模块（交互 CLI + 脚本 API）
+│   ├── species.py              # 物种名标准化（本地缓存 + NCBI Taxonomy API）
+│   ├── search.py               # PubMed 检索（字段标签 + ELink 跨库导航）
+│   ├── ena.py                  # BioProject / SRA 解析（ESummary + ELink）
+│   └── export.py               # Excel/CSV/JSON 导出（7 列固定格式）
 ├── scripts/
-│   ├── install.sh           # Linux/macOS Conda installer
-│   └── install.ps1          # Windows Conda installer
+│   ├── install.sh              # Linux/macOS Conda 安装脚本
+│   └── install.ps1             # Windows Conda 安装脚本
 └── tests/
-    └── test_skill.py        # 30+ pytest cases with mock PubMed
+    └── test_skill.py           # 30+ pytest 测试用例（mock NCBI）
 ```
 
 ---
 
-## Running Tests
+## 运行测试
 
 ```bash
-# Install dev dependencies
+# 安装开发依赖
 pip install pytest openpyxl biopython pyyaml
 
-# Run all tests (mocked — no network required)
+# 运行全部测试（mock 模式，无需网络）
 pytest tests/test_skill.py -v
 
-# With coverage
+# 含覆盖率报告
 pip install pytest-cov
 pytest tests/test_skill.py --cov=skill --cov-report=term-missing
 ```
 
 ---
 
-## API Reference
+## API 参考
 
-### `SkillMicrobiomeSkill` (main entry point)
+### `SkinMicrobiomeSkill`（主入口）
 
-| Method | Description |
-|--------|-------------|
-| `run_interactive()` | Full interactive session with prompts and preview |
-| `run_pipeline(species, extra_keywords, max_results, export_format)` | Non-interactive one-shot pipeline |
-| `search(species_latin, extra_keywords)` | PubMed search + filter only |
-| `get_species_info(name)` | Normalize species name (Chinese/English → Latin) |
-| `export(data, format, output_path)` | Export article list to file |
+| 方法 | 说明 |
+|------|------|
+| `run_interactive()` | 完整交互式会话（含预览和关键词优化） |
+| `run_pipeline(species, extra_keywords, max_results, export_format)` | 非交互式一键管线 |
+| `search(species_latin, extra_keywords)` | 仅执行 PubMed 检索 + 过滤 |
+| `get_species_info(name)` | 物种名标准化（中文/英文 → 拉丁学名） |
+| `export(data, format, output_path)` | 导出文献列表到文件 |
 
 ### `SpeciesManager`
 
-| Method | Description |
-|--------|-------------|
-| `normalize(name)` | Chinese/English/Latin → canonical dict (`chinese`, `english`, `latin`, `taxon_id`) |
-| `list_all()` | All species (animals + microbes) |
-| `list_animals()` | Non-human animals only |
-| `search(keyword)` | Fuzzy search across all name fields |
+| 方法 | 说明 |
+|------|------|
+| `normalize(name)` | 中文/英文/拉丁名 → 标准化字典（`chinese`, `english`, `latin`, `taxon_id`） |
+| `list_all()` | 列出本地数据库中所有物种 |
+| `list_animals()` | 仅列出非人类动物 |
+| `search(keyword)` | 跨字段模糊搜索 |
+| `_ncbi_taxonomy_lookup(name)` | NCBI Taxonomy API 动态查找（不在本地库中的物种） |
 
 ### `SearchEngine`
 
-| Method | Description |
-|--------|-------------|
-| `search(species_latin, extra_keywords)` | Full PubMed pipeline: query → filter → site extraction |
-| `extract_sampling_site(article)` | Extract anatomical site from abstract |
-| `extract_bioproject_ids(article)` | Extract PRJNAxxx/PRJEBxxx IDs |
-| `extract_ena_ids(article)` | Extract all ENA/SRA accessions |
+| 方法 | 说明 |
+|------|------|
+| `search(species_latin, extra_keywords)` | 完整检索管线：查询 → 过滤 → ELink → 部位提取 |
+| `_elink_pubmed_to_bioproject(pmids)` | ELink PubMed → BioProject 批量跨库导航 |
+| `_elink_pubmed_to_sra(pmids)` | ELink PubMed → SRA 批量跨库导航 |
+| `extract_sampling_site(article)` | 从摘要中提取解剖取样部位 |
+| `extract_bioproject_ids(article)` | 正则提取 BioProject ID（回退方案） |
+
+### `ENAClient`
+
+| 方法 | 说明 |
+|------|------|
+| `resolve_bioproject(bioproject_id)` | 通过 ESummary 获取 BioProject 标题/描述 |
+| `get_bioproject_summary(bioproject_id)` | 获取完整 BioProject 元数据 |
+| `get_sra_runs_for_bioproject(bioproject_id)` | ELink BioProject → SRA 运行列表 |
 
 ---
 
-## GitHub Repository
+## GitHub 仓库
 
-- **Repository**: [https://github.com/your-org/skin_microbiome_skill](https://github.com/your-org/skin_microbiome_skill)
-- **Issues**: Bug reports and feature requests are welcome
-- **Contributing**: Fork the repo, create a branch, and submit a pull request
+- **仓库地址**：[https://github.com/zhijianxiao/skin_microbiome_skill](https://github.com/zhijianxiao/skin_microbiome_skill)
+- **问题反馈**：欢迎提交 Bug 报告和功能建议
+- **贡献指南**：Fork → 创建分支 → 提交 PR
 
-### Adding a New Species
+### 添加新物种
 
-1. Edit `skill/species.py`
-2. Add an entry to `_SPECIES_DB`:
+1. 编辑 `skill/species.py`
+2. 在 `_LOCAL_DB` 字典中添加条目：
    ```python
-   {"chinese": "新物种", "english": "New Animal", "latin": "Animalis novus", "taxon_id": "12345"},
+   "新物种中文名": {"chinese": "...", "english": "...", "latin": "...", "taxon_id": "..."},
    ```
-3. Run tests to verify: `pytest tests/test_skill.py -v`
+3. 运行测试验证：`pytest tests/test_skill.py -v`
 
 ---
 
-## License
+## 技术参考
 
-This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for full text.
+本项目检索逻辑参考了开源项目 [GPTomics/bioSkills](https://github.com/GPTomics/bioSkills) 的 `database-access` 模块：
 
-You are free to use, modify, and distribute this software for academic, research, or commercial purposes. Attribution is appreciated but not required.
+- **entrez-search**：字段标签查询语法（`[title/abstract]`, `[scin]`, `[comn]`, `[mesh]`）
+- **entrez-fetch**：ESummary 快速元数据 + EFetch 完整记录
+- **entrez-link**：跨数据库导航（`dbfrom='pubmed'` → `db='bioproject'` / `db='sra'`）
+- **sra-data**：SRA 层级结构（SRP > SRX > SRS > SRR）
 
 ---
 
-## References
+## 许可证
 
-- [PubMed / NCBI Entrez](https://www.ncbi.nlm.nih.gov/books/NBK25501/)
+本项目采用 **MIT 许可证** — 详见 [LICENSE](LICENSE)。
+
+可自由用于学术研究或商业用途。
+
+---
+
+## 参考资料
+
+- [NCBI Entrez Programming Utilities](https://www.ncbi.nlm.nih.gov/books/NBK25501/)
 - [ENA Browser API](https://www.ebi.ac.uk/ena/browser/api)
-- [Biopython Documentation](https://biopython.org/docs/)
+- [Biopython 文档](https://biopython.org/docs/)
+- [GPTomics/bioSkills](https://github.com/GPTomics/bioSkills)

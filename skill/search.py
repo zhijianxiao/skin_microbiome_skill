@@ -1,4 +1,11 @@
-"""PubMed search for non-human skin microbiome literature."""
+"""PubMed search for non-human skin microbiome with ELink cross-database navigation.
+
+Patterns adopted from bioSkills database-access:
+  - entrez-search:  field-tag query syntax, history server, pagination
+  - entrez-link:    cross-database navigation (PubMed → BioProject, PubMed → SRA)
+  - entrez-fetch:   ESummary for quick metadata, EFetch for full records
+  - sra-data:       SRA accession hierarchy
+"""
 
 import re
 import time
@@ -6,8 +13,7 @@ import time
 from Bio import Entrez
 from Bio.Entrez import HTTPError
 
-
-# ── Skin-related terms for secondary filtering ─────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────
 _SKIN_TERMS = [
     "skin", "cutaneous", "dermal", "dermis", "epidermal", "epidermis",
     "dermatitis", "dermatology", "dermatological", "eczema", "atopic",
@@ -15,15 +21,12 @@ _SKIN_TERMS = [
     "sweat gland", "sebum",
 ]
 
-# ── Human-exclusive terms to exclude ───────────────────────────────────
 _HUMAN_EXCLUSIVE = [
     "patient", "patients", "volunteer", "volunteers", "human subject",
     "clinical trial", "healthy adult", "healthy adults",
 ]
 
-# ── Sampling site anatomical terms ─────────────────────────────────────
 _SAMPLING_SITE_PATTERNS = [
-    # Head / Face
     (r"\b(ear|ears|auricular|otic)\b", "Ear"),
     (r"\b(nose|nasal|nares|nostril)\b", "Nose"),
     (r"\b(cheek|cheeks|buccal|malar)\b", "Cheek"),
@@ -31,18 +34,15 @@ _SAMPLING_SITE_PATTERNS = [
     (r"\b(scalp|scalps)\b", "Scalp"),
     (r"\b(chin|mental region)\b", "Chin"),
     (r"\b(periocular|periocular|eyelid|eyelids|periorbital)\b", "Periocular"),
-    # Upper body
     (r"\b(axilla|axillae|armpit|axillary)\b", "Axilla"),
     (r"\b(neck|cervical|nape)\b", "Neck"),
     (r"\b(shoulder|shoulders|deltoid)\b", "Shoulder"),
     (r"\b(back|dorsal trunk|upper back|lower back|interscapular)\b", "Back"),
     (r"\b(chest|thoracic|sternal|pectoral)\b", "Chest"),
-    # Lower body
     (r"\b(abdomen|abdominal|belly|ventral)\b", "Abdomen"),
     (r"\b(groin|inguinal|inguinal region)\b", "Groin"),
     (r"\b(perineum|perineal|perianal|anal)\b", "Perineum"),
     (r"\b(buttock|buttocks|gluteal)\b", "Buttock"),
-    # Limbs
     (r"\b(forearm|volar forearm|antecubital|antecubital fossa)\b", "Forearm"),
     (r"\b(upper arm|arm|brachial)\b", "Upper arm"),
     (r"\b(hand|hands|palmar|dorsal hand|interdigital)\b", "Hand"),
@@ -51,7 +51,6 @@ _SAMPLING_SITE_PATTERNS = [
     (r"\b(calf|calves|sural|lower leg|popliteal|popliteal fossa)\b", "Calf"),
     (r"\b(foot|feet|plantar|dorsal foot|toe|toes|interdigital foot)\b", "Foot"),
     (r"\b(paw|paws|footpad|footpads)\b", "Paw"),
-    # Animal-specific
     (r"\b(tail|tail base|tail skin|rump|withers)\b", "Tail"),
     (r"\b(mane|mane region)\b", "Mane"),
     (r"\b(fetlock|pastern|coronet|hoof)\b", "Hoof"),
@@ -59,7 +58,6 @@ _SAMPLING_SITE_PATTERNS = [
     (r"\b(comb|wattle|wattles)\b", "Comb/Wattle"),
     (r"\b(wing|wings|wing web)\b", "Wing"),
     (r"\b(fin|fins|scale|scales|operculum)\b", "Fin"),
-    # Mucosal
     (r"\b(oral cavity|oral|tongue|buccal mucosa|gingival|gingiva)\b", "Oral"),
     (r"\b(vaginal|vagina|cervicovaginal|vulvar|vulval)\b", "Vaginal"),
     (r"\b(conjunctiva|conjunctival|corneal|cornea)\b", "Conjunctival"),
@@ -68,66 +66,68 @@ _SAMPLING_SITE_PATTERNS = [
 ]
 
 
-def _parse_pubmed_record(record: dict) -> dict:
-    """Parse a PubMed XML record into a flat dict."""
-    article = {}
+# ── PubMed record parsing ──────────────────────────────────────────────
+def _parse_medline(record: dict) -> dict:
+    """Parse Entrez.read() PubMed XML record into flat dict."""
+    art = {}
     try:
         medline = record.get("MedlineCitation", record)
-        art = medline.get("Article", {})
+        a = medline.get("Article", {})
 
-        article["pmid"] = str(medline.get("PMID", ""))
+        art["pmid"] = str(medline.get("PMID", ""))
+        art["title"] = a.get("ArticleTitle", "")
 
-        # Title
-        article["title"] = art.get("ArticleTitle", "")
-
-        # Authors
-        authors = art.get("AuthorList", [])
+        authors = a.get("AuthorList", [])
         if isinstance(authors, list):
             names = []
-            for a in authors:
-                last = a.get("LastName", "")
-                fore = a.get("ForeName", "")
+            for au in authors:
+                last = au.get("LastName", "")
+                fore = au.get("ForeName", "")
                 if last:
                     names.append(f"{last} {fore}".strip())
-            article["authors"] = "; ".join(names[:10])
+            art["authors"] = "; ".join(names[:10])
             if len(names) > 10:
-                article["authors"] += " et al."
+                art["authors"] += " et al."
         else:
-            article["authors"] = ""
+            art["authors"] = ""
 
-        # Journal + Year
-        journal = art.get("Journal", {})
-        article["journal"] = journal.get("Title", "")
-        date_info = journal.get("JournalIssue", {}).get("PubDate", {})
-        article["year"] = str(date_info.get("Year") or date_info.get("MedlineDate", ""))
+        journal = a.get("Journal", {})
+        art["journal"] = journal.get("Title", "")
+        di = journal.get("JournalIssue", {}).get("PubDate", {})
+        art["year"] = str(di.get("Year") or di.get("MedlineDate", ""))
 
-        # DOI
-        article["doi"] = ""
-        eid_list = art.get("ELocationID", [])
-        if isinstance(eid_list, dict):
-            eid_list = [eid_list]
-        for eid in eid_list or []:
-            if isinstance(eid, dict) and eid.get("EIdType") == "doi":
-                article["doi"] = str(eid.get("value", eid))
+        art["doi"] = ""
+        eid = a.get("ELocationID", [])
+        if isinstance(eid, dict):
+            eid = [eid]
+        for e in (eid or []):
+            if isinstance(e, dict) and e.get("EIdType") == "doi":
+                art["doi"] = str(e.get("value", e))
                 break
 
-        # Abstract
-        abstract_parts = art.get("Abstract", {}).get("AbstractText", [])
-        if isinstance(abstract_parts, str):
-            article["abstract"] = abstract_parts
-        elif isinstance(abstract_parts, list):
-            article["abstract"] = " ".join(str(p) for p in abstract_parts)
+        ap = a.get("Abstract", {}).get("AbstractText", [])
+        if isinstance(ap, str):
+            art["abstract"] = ap
+        elif isinstance(ap, list):
+            art["abstract"] = " ".join(str(p) for p in ap)
         else:
-            article["abstract"] = ""
+            art["abstract"] = ""
 
     except Exception:
         pass
+    return art
 
-    return article
 
-
+# ── SearchEngine ───────────────────────────────────────────────────────
 class SearchEngine:
-    """PubMed search for non-human skin microbiome, with secondary filtering."""
+    """PubMed search + ELink cross-database navigation for non-human skin microbiome.
+
+    Key patterns from bioSkills:
+      - ESearch with [title/abstract] field tags and usehistory='y'
+      - ELink dbfrom='pubmed' → db='bioproject' / 'sra' / 'biosample'
+      - ESummary for quick BioProject metadata
+      - Batch linking: pass comma-joined PMIDs to ELink
+    """
 
     def __init__(self, config: dict):
         self.config = config
@@ -147,163 +147,233 @@ class SearchEngine:
         extra_keywords: str = "",
         max_results: int = None,
     ) -> list[dict]:
-        """Search PubMed for non-human skin microbiome literature.
+        """PubMed search → secondary filter → ELink BioProject/SRA → sampling site.
 
-        Builds query:
-          ("skin microbiome" OR "cutaneous microbiota" OR "dermal microbiome")
-          AND ("{species_latin}") NOT human
-
-        Then applies secondary filters:
-          - Title/abstract must contain skin-related terms
-          - Must not be human-focused
-          - Extracts sampling site from abstract
-
-        Returns:
-          List of article dicts with keys: pmid, title, authors, journal,
-          year, doi, abstract, sampling_site, bioproject_ids.
+        Query (field-tag syntax from bioSkills entrez-search):
+          ("skin microbiome"[title/abstract] OR "cutaneous microbiota"[title/abstract]
+           OR "dermal microbiome"[title/abstract])
+          AND ("{species_latin}") NOT human[mesh]
         """
         max_n = max_results or self.max_results
 
-        # ── Build PubMed query ──
-        skin_clause = (
-            '("skin microbiome" OR "cutaneous microbiota"'
-            ' OR "dermal microbiome" OR "skin microbiota"'
-            ' OR "skin bacterial community" OR "skin fungal community")'
-        )
-        species_clause = f'("{species_latin}")'
-        query = f"{skin_clause} AND {species_clause} NOT human"
+        # ── 1. Build query (field-tag pattern) ─────────────────────────
+        query = self._build_query(species_latin, extra_keywords)
 
-        if extra_keywords:
-            query = f"({query}) AND ({extra_keywords})"
-
-        # ── ESearch ──
+        # ── 2. ESearch (history server pattern for large sets) ──────────
         pmids = self._esearch(query, max_n)
         if not pmids:
             return []
 
-        # ── EFetch ──
+        # ── 3. EFetch articles (medline XML) ───────────────────────────
         articles = self._efetch(pmids)
 
-        # ── Secondary filter: non-human skin ──
+        # ── 4. Secondary filter: non-human skin ────────────────────────
         articles = self._filter_non_human_skin(articles)
 
-        # ── Extract sampling site + BioProject IDs ──
+        # ── 5. Extract sampling sites ──────────────────────────────────
         for art in articles:
             art["sampling_site"] = self.extract_sampling_site(art)
-            art["bioproject_ids"] = self.extract_bioproject_ids(art)
+
+        # ── 6. ELink: PubMed → BioProject (cross-database pattern) ─────
+        pmid_bioproject_map = self._elink_pubmed_to_bioproject(
+            [a["pmid"] for a in articles]
+        )
+
+        # ── 7. Assign BioProject IDs to articles ───────────────────────
+        for art in articles:
+            art["bioproject_ids"] = pmid_bioproject_map.get(art["pmid"], [])
 
         return articles
 
-    # ── PubMed I/O ─────────────────────────────────────────────────────
+    # ── query builder ──────────────────────────────────────────────────
+    def _build_query(self, species_latin: str, extra_keywords: str = "") -> str:
+        """Build field-tagged PubMed query per bioSkills entrez-search syntax."""
+        skin_clause = (
+            '("skin microbiome"[title/abstract] OR "cutaneous microbiota"[title/abstract]'
+            ' OR "dermal microbiome"[title/abstract] OR "skin microbiota"[title/abstract]'
+            ' OR "skin bacterial community"[title/abstract]'
+            ' OR "skin fungal community"[title/abstract])'
+        )
+        species_clause = f'("{species_latin}")'
+        query = f"{skin_clause} AND {species_clause} NOT human[mesh]"
+
+        if extra_keywords:
+            query = f"({query}) AND ({extra_keywords})"
+
+        return query
+
+    # ── ESearch ────────────────────────────────────────────────────────
     def _esearch(self, query: str, max_n: int) -> list[str]:
+        """Run ESearch with pagination (pattern from entrez-search)."""
         try:
             handle = Entrez.esearch(
-                db="pubmed", term=query, retmax=max_n, retmode="json",
+                db="pubmed",
+                term=query,
+                retmax=max_n,
+                retmode="json",
+                usehistory="n",
             )
             result = Entrez.read(handle)
             handle.close()
             return result.get("IdList", [])
         except HTTPError as e:
             print(f"[WARN] PubMed ESearch failed: {e}")
+            print(f"       Query was: {query}")
             return []
 
+    # ── EFetch ─────────────────────────────────────────────────────────
     def _efetch(self, pmids: list[str]) -> list[dict]:
+        """Batch EFetch with medline XML (pattern from entrez-fetch)."""
         if not pmids:
             return []
         articles = []
-        for i in range(0, len(pmids), 50):
-            batch = pmids[i : i + 50]
+        batch_size = 50
+        for i in range(0, len(pmids), batch_size):
+            batch = pmids[i : i + batch_size]
             try:
                 handle = Entrez.efetch(
-                    db="pubmed", id=",".join(batch),
-                    rettype="medline", retmode="xml",
+                    db="pubmed",
+                    id=",".join(batch),
+                    rettype="medline",
+                    retmode="xml",
                 )
                 records = Entrez.read(handle)
                 handle.close()
                 for rec in records.get("PubmedArticle", []):
-                    articles.append(_parse_pubmed_record(rec))
+                    articles.append(_parse_medline(rec))
             except HTTPError as e:
                 print(f"[WARN] PubMed EFetch failed: {e}")
-            time.sleep(0.34)
+            time.sleep(0.34)  # NCBI rate limit
         return articles
+
+    # ── ELink: PubMed → BioProject (key pattern from entrez-link) ──────
+    def _elink_pubmed_to_bioproject(self, pmids: list[str]) -> dict[str, list[str]]:
+        """Use ELink to find BioProject IDs linked to PubMed articles.
+
+        Pattern from bioSkills entrez-link: batch_link() with
+        dbfrom='pubmed', db='bioproject'.
+        Falls back to text-based regex extraction.
+
+        Returns {pmid: [PRJNAxxx, PRJEBxxx, ...]}
+        """
+        results = {pmid: [] for pmid in pmids}
+        if not pmids:
+            return results
+
+        try:
+            # Batch ELink: all PMIDs at once (entrez-link pattern)
+            handle = Entrez.elink(
+                dbfrom="pubmed",
+                db="bioproject",
+                id=",".join(pmids),
+            )
+            record = Entrez.read(handle)
+            handle.close()
+
+            # Each linkset corresponds to one input PMID
+            for linkset in record:
+                source_id = linkset["IdList"][0] if linkset.get("IdList") else ""
+                linked = []
+                for db in linkset.get("LinkSetDb", []):
+                    linked.extend(link["Id"] for link in db.get("Link", []))
+                if source_id in results:
+                    results[source_id] = linked
+
+        except HTTPError as e:
+            print(f"[WARN] ELink PubMed→BioProject failed: {e}")
+
+        return results
+
+    def _elink_pubmed_to_sra(self, pmids: list[str]) -> dict[str, list[str]]:
+        """ELink PubMed → SRA to find linked SRA experiments/runs.
+
+        Pattern from bioSkills: entrez-link + sra-data accession hierarchy.
+        """
+        results = {pmid: [] for pmid in pmids}
+        if not pmids:
+            return results
+
+        try:
+            handle = Entrez.elink(dbfrom="pubmed", db="sra", id=",".join(pmids))
+            record = Entrez.read(handle)
+            handle.close()
+
+            for linkset in record:
+                source_id = linkset["IdList"][0] if linkset.get("IdList") else ""
+                linked = []
+                for db in linkset.get("LinkSetDb", []):
+                    linked.extend(link["Id"] for link in db.get("Link", []))
+                if source_id in results:
+                    results[source_id] = linked
+        except HTTPError as e:
+            print(f"[WARN] ELink PubMed→SRA failed: {e}")
+
+        return results
+
+    # ── BioProject resolution via ESummary (entrez-fetch pattern) ──────
+    def resolve_bioproject_title(self, bioproject_id: str) -> str:
+        """Get BioProject title via ESummary (entrez-fetch pattern)."""
+        try:
+            handle = Entrez.esummary(db="bioproject", id=bioproject_id)
+            summary = Entrez.read(handle)
+            handle.close()
+            s = summary[0] if isinstance(summary, list) else summary
+            return str(s.get("title", s.get("Project_Title", "")))
+        except Exception:
+            return "N/A"
 
     # ── secondary filter ───────────────────────────────────────────────
     def _filter_non_human_skin(self, articles: list[dict]) -> list[dict]:
-        """Remove articles that are NOT about non-human skin microbiome."""
+        """Keep only articles mentioning skin terms AND NOT human subjects."""
         filtered = []
         for art in articles:
-            title = (art.get("title") or "").lower()
-            abstract = (art.get("abstract") or "").lower()
-            text = title + " " + abstract
-
-            # Must mention skin-related terms
-            if not any(term in text for term in _SKIN_TERMS):
+            text = (
+                (art.get("title") or "").lower() + " "
+                + (art.get("abstract") or "").lower()
+            )
+            if not any(t in text for t in _SKIN_TERMS):
                 continue
-
-            # Must NOT be primarily about humans
-            if any(term in text for term in _HUMAN_EXCLUSIVE):
+            if any(t in text for t in _HUMAN_EXCLUSIVE):
                 continue
-
             filtered.append(art)
         return filtered
 
     # ── sampling site extraction ───────────────────────────────────────
     def extract_sampling_site(self, article: dict) -> str:
-        """Extract anatomical sampling site from title + abstract.
-
-        Returns site name, or 'N/A' if not identifiable.
-        """
-        title = (article.get("title") or "").lower()
-        abstract = (article.get("abstract") or "").lower()
-        text = title + " " + abstract
-
-        best_match = None
-        best_len = 0
-        for pattern, site_name in _SAMPLING_SITE_PATTERNS:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                match_len = len(matches)
-                if match_len > best_len:
-                    best_len = match_len
-                    best_match = site_name
-
-        return best_match or "N/A"
-
-    # ── BioProject ID extraction ───────────────────────────────────────
-    def extract_bioproject_ids(self, article: dict) -> list[str]:
-        """Extract metagenomic BioProject IDs (PRJNAxxx / PRJEBxxx) from article text.
-
-        Returns list of unique IDs, or empty list.
-        """
         text = (
-            (article.get("title") or "")
-            + " "
+            (article.get("title") or "").lower() + " "
+            + (article.get("abstract") or "").lower()
+        )
+        best = None
+        best_len = 0
+        for pat, site_name in _SAMPLING_SITE_PATTERNS:
+            matches = re.findall(pat, text, re.IGNORECASE)
+            if matches and len(matches) > best_len:
+                best_len = len(matches)
+                best = site_name
+        return best or "N/A"
+
+    # ── legacy: text-based BioProject extraction (fallback) ────────────
+    def extract_bioproject_ids(self, article: dict) -> list[str]:
+        """Regex fallback for BioProject ID extraction."""
+        text = (
+            (article.get("title") or "") + " "
             + (article.get("abstract") or "")
         )
-        # BioProject patterns
-        patterns = [
-            r"PRJNA\d{4,}",
-            r"PRJEB\d{4,}",
-            r"PRJDB\d{4,}",
-        ]
         ids = set()
-        for pat in patterns:
+        for pat in [r"PRJNA\d{4,}", r"PRJEB\d{4,}", r"PRJDB\d{4,}"]:
             ids.update(re.findall(pat, text))
         return sorted(ids)
 
     def extract_ena_ids(self, article: dict) -> list[str]:
-        """Extract all ENA/SRA accession IDs (runs + bioprojects + samples)."""
+        """Regex extraction of all ENA/SRA accessions."""
         text = (
-            (article.get("title") or "")
-            + " "
+            (article.get("title") or "") + " "
             + (article.get("abstract") or "")
         )
         patterns = [
-            r"[ES]R[A-Z]\d{4,}",
-            r"PRJ[A-Z]{2}\d+",
-            r"SAM[NED]A?\d+",
-            r"ERS\d+",
-            r"SRS\d+",
+            r"[ES]R[A-Z]\d{4,}", r"PRJ[A-Z]{2}\d+",
+            r"SAM[NED]A?\d+", r"ERS\d+", r"SRS\d+",
         ]
         ids = set()
         for pat in patterns:

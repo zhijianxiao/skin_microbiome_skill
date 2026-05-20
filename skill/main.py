@@ -1,7 +1,14 @@
-"""Main entry point — non-human skin microbiome literature pipeline.
+"""Main entry point — non-human skin microbiome literature + BioProject pipeline.
 
-Flow: user input → species normalization → PubMed search (non-human skin)
-      → BioProject resolution → Excel export.
+Patterns adopted from bioSkills:
+  - entrez-search:  field-tag query, pagination
+  - entrez-link:    PubMed → BioProject / SRA cross-database navigation
+  - entrez-fetch:   ESummary for metadata
+  - sra-data:       SRA accession hierarchy
+
+Flow:
+  Species input → NCBI Taxonomy lookup → PubMed search (non-human skin)
+  → ELink BioProject → ELink SRA → ESummary metadata → Excel export
 """
 
 import sys
@@ -20,19 +27,15 @@ _BANNER = "=" * 62
 
 
 def detect_platform() -> str:
-    """Return 'linux', 'windows', or 'macos'."""
     s = platform.system().lower()
-    if s == "linux":
-        return "linux"
-    elif s == "windows":
-        return "windows"
-    elif s == "darwin":
-        return "macos"
+    if s == "linux":   return "linux"
+    elif s == "windows": return "windows"
+    elif s == "darwin":  return "macos"
     return s
 
 
 class SkinMicrobiomeSkill:
-    """Orchestrates: species → PubMed (non-human skin) → BioProject → Excel."""
+    """Orchestrator: species → PubMed (non-human skin) → ELink → Excel."""
 
     def __init__(self, config_path: str = "config.yaml"):
         self.config = self._load_config(config_path)
@@ -42,7 +45,6 @@ class SkinMicrobiomeSkill:
         self.exporter = Exporter(self.config)
         self.platform = detect_platform()
 
-    # ── config ─────────────────────────────────────────────────────────
     def _load_config(self, config_path: str) -> dict:
         p = Path(config_path)
         if not p.exists():
@@ -55,30 +57,31 @@ class SkinMicrobiomeSkill:
     #  Interactive pipeline
     # ═══════════════════════════════════════════════════════════════════
     def run_interactive(self) -> list[dict]:
-        """Full interactive session with preview and keyword refinement."""
-
         print(_BANNER)
         print("  Non-Human Skin Microbiome Literature Search")
         print(f"  Platform: {self.platform}")
+        print(f"  Methods: NCBI Entrez + ELink (bioSkills patterns)")
         print(_BANNER)
 
-        # ── 1. Species input & normalization ──────────────────────────
+        # ── 1. Species ─────────────────────────────────────────────────
         species_info = self._prompt_species()
         if species_info is None:
             return []
 
         species_latin = species_info.get("latin", "")
-        print(f"\n  Normalized: {species_info.get('chinese', '?')}"
+        print(f"\n  Species: {species_info.get('chinese', '?')}"
               f" → {species_info.get('english', '?')}"
-              f" → {species_latin}")
+              f" → {species_latin}"
+              f"  (taxon={species_info.get('taxon_id', '?')})")
 
         # ── 2. Keywords ───────────────────────────────────────────────
         keywords = input("\n  Extra keywords (optional, Enter to skip): ").strip()
 
-        # ── 3. PubMed search ──────────────────────────────────────────
+        # ── 3. PubMed search (field-tagged query + ELink BioProject) ──
         max_n = self.search_engine.max_results
         print(f"\n  Searching PubMed (max {max_n})…")
-        print(f"  Query: (skin microbiome) AND ({species_latin}) NOT human")
+        print(f"  Query: field-tagged, NOT human[mesh], "
+              f"ELink → BioProject / SRA")
 
         articles = self.search_engine.search(
             species_latin=species_latin,
@@ -87,54 +90,63 @@ class SkinMicrobiomeSkill:
         print(f"  → {len(articles)} articles after non-human skin filter.")
 
         if not articles:
-            print("  No results. Try broader or different species.")
+            print("  No results. Try a different species or broader terms.")
             return []
 
         # ── 4. Preview & refine ───────────────────────────────────────
         self._preview_articles(articles)
         articles = self._refine_loop(articles, species_latin)
 
-        # ── 5. BioProject lookup ──────────────────────────────────────
+        # ── 5. BioProject resolution (ESummary — bioSkills pattern) ───
         self._resolve_bioprojects(articles)
 
         # ── 6. Annotate species ───────────────────────────────────────
         for art in articles:
             art["species"] = species_latin
 
-        # ── 7. Export ─────────────────────────────────────────────────
+        # ── 7. Annotate SRA runs ──────────────────────────────────────
+        sra_map = self.search_engine._elink_pubmed_to_sra(
+            [a["pmid"] for a in articles]
+        )
+        for art in articles:
+            art["sra_linked"] = sra_map.get(art["pmid"], [])
+
+        # ── 8. Export ─────────────────────────────────────────────────
         self._export_interactive(articles, species_latin)
 
         return articles
 
     # ── step 1: species prompt ─────────────────────────────────────────
     def _prompt_species(self) -> dict | None:
-        """Ask for species name, normalize, allow retry."""
         while True:
-            raw = input("\n  Species name (Chinese or English, e.g. 马 / mouse): ").strip()
+            raw = input("\n  Species name (Chinese/English, e.g. 马 / mouse): ").strip()
             if not raw:
                 print("  Please enter a species name.")
                 continue
-
             result = self.species_manager.normalize(raw)
             if result:
                 return result
-
-            print(f"  '{raw}' not in database.")
-            print("  Available animals:")
+            print(f"  '{raw}' not in local DB. Trying NCBI Taxonomy…")
+            result = self.species_manager._ncbi_taxonomy_lookup(raw)
+            if result:
+                print(f"  Found via NCBI: {result['latin']} (taxon={result['taxon_id']})")
+                return result
+            print(f"  Not found. Try a different name.")
+            print("  Available (local):")
             for s in self.species_manager.list_animals():
                 print(f"    {s['chinese']:8s} → {s['latin']}")
             again = input("  Try again? [Y/n]: ").strip().lower()
             if again == "n":
                 return None
 
-    # ── step 4: preview ────────────────────────────────────────────────
+    # ── preview ────────────────────────────────────────────────────────
     def _preview_articles(self, articles: list[dict], top_n: int = 10):
         n = min(top_n, len(articles))
         print(f"\n{'─' * 80}")
         print(f"  Preview — top {n} of {len(articles)} articles")
         print(f"{'─' * 80}")
         for i, art in enumerate(articles[:n], 1):
-            title = (art.get("title") or "")[:90]
+            title = (art.get("title") or "")[:85]
             year = art.get("year", "?")
             site = art.get("sampling_site", "N/A")
             bp = art.get("bioproject_ids", [])
@@ -143,7 +155,6 @@ class SkinMicrobiomeSkill:
             print(f"       year={year}  site={site}  bioproject={bp_str}")
         print(f"{'─' * 80}")
 
-    # ── step 4b: keyword refinement ────────────────────────────────────
     def _refine_loop(self, articles: list[dict], species_latin: str) -> list[dict]:
         while True:
             print("\n  Options: [Enter] continue  [r] refine keywords  [q] quit")
@@ -166,10 +177,8 @@ class SkinMicrobiomeSkill:
             else:
                 print("  Unknown option.")
 
-    # ── step 5: BioProject resolution ──────────────────────────────────
     def _resolve_bioprojects(self, articles: list[dict]):
-        """Resolve BioProject IDs for each article via ENA."""
-        print("\n  Resolving metagenomic BioProject IDs…")
+        print("\n  Resolving BioProject metadata (ESummary pattern)…")
         for art in articles:
             bp_ids = art.get("bioproject_ids", [])
             if bp_ids:
@@ -180,9 +189,8 @@ class SkinMicrobiomeSkill:
             else:
                 art["bioproject_resolved"] = {}
         resolved = sum(1 for a in articles if a.get("bioproject_ids"))
-        print(f"  BioProjects found in {resolved}/{len(articles)} articles.")
+        print(f"  BioProjects found via ELink in {resolved}/{len(articles)} articles.")
 
-    # ── step 7: export ─────────────────────────────────────────────────
     def _export_interactive(self, articles: list[dict], species_name: str):
         print("\n  Export format:")
         print("    [1] Excel (.xlsx) — default")
@@ -199,10 +207,12 @@ class SkinMicrobiomeSkill:
             print(f"\n  Exported to: {path}")
 
     # ═══════════════════════════════════════════════════════════════════
-    #  Programmatic API (non-interactive)
+    #  Programmatic API
     # ═══════════════════════════════════════════════════════════════════
     def search(self, species_latin: str, extra_keywords: str = "") -> list[dict]:
-        return self.search_engine.search(species_latin=species_latin, extra_keywords=extra_keywords)
+        return self.search_engine.search(
+            species_latin=species_latin, extra_keywords=extra_keywords
+        )
 
     def get_species_info(self, species_name: str) -> dict:
         return self.species_manager.get_info(species_name)
@@ -210,8 +220,7 @@ class SkinMicrobiomeSkill:
     def query_ena(self, accession: str) -> dict | None:
         return self.ena_client.query(accession)
 
-    def export(self, data: list[dict], format: str = "xlsx",
-               output_path: str = None) -> str | None:
+    def export(self, data, format="xlsx", output_path=None) -> str | None:
         return self.exporter.export(data, format=format, output_path=output_path)
 
     def run_pipeline(
@@ -221,10 +230,7 @@ class SkinMicrobiomeSkill:
         max_results: int = None,
         export_format: str = "xlsx",
     ) -> list[dict]:
-        """Non-interactive pipeline for scripting / batch use.
-
-        Returns annotated article list.
-        """
+        """Non-interactive pipeline for scripting."""
         species_info = self.species_manager.normalize(species)
         if species_info is None:
             raise ValueError(f"Unknown species: {species}")
@@ -240,7 +246,9 @@ class SkinMicrobiomeSkill:
             art["species"] = species_latin
 
         if export_format:
-            self.exporter.export(articles, format=export_format, species_name=species_latin)
+            self.exporter.export(
+                articles, format=export_format, species_name=species_latin,
+            )
 
         return articles
 
@@ -254,13 +262,9 @@ def main():
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == "list-species":
-            print("Non-human animals:")
+            print("Species (local DB):")
             for s in skill.species_manager.list_animals():
                 print(f"  {s['chinese']:8s} → {s['latin']}")
-            print("\nMicrobes:")
-            for s in skill.species_manager.list_all():
-                if s not in skill.species_manager.list_animals():
-                    print(f"  {s['chinese']:8s} → {s['latin']}")
         elif cmd == "search":
             species = sys.argv[2] if len(sys.argv) > 2 else None
             if not species:
