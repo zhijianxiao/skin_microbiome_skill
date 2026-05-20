@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.Python
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Conda
+.conda/
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Output files
+output/
+*.xlsx
+*.csv
+!tests/fixtures/*.csv
+
+# Data files
+*.fastq
+*.fq
+*.fastq.gz
+*.fq.gz
+*.fa
+*.fasta
+*.sam
+*.bam
+*.bai
+*.vcf
+*.vcf.gz
+
+# Config with secrets (keep template)
+config.local.yaml
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+
+# SRA / ENA cache
+.sra_cache/
+ena_cache/
+
+# Environment variables
+.env
+.env.local

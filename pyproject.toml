@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skin_microbiome_skill"
+version = "0.1.0"
+description = "A Python skill for searching, analyzing, and exporting skin microbiome species data"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "biopython",
+    "pandas",
+    "scispacy",
+    "enaBrowserTools",
+    "openpyxl",
+    "sra-tools",
+    "transformers",
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[project.scripts]
+skin-microbiome = "skill.main:main"

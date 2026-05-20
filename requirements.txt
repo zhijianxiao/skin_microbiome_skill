@@ -1,0 +1,8 @@
+biopython
+pandas
+scispacy
+enaBrowserTools
+openpyxl
+sra-tools
+transformers
+torch

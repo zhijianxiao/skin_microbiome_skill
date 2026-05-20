@@ -1,0 +1,18 @@
+# ── Skin Microbiome Skill ──────────────────────────────────────────────
+# Non-human skin microbiome literature + metagenomic dataset search
+
+# PubMed / NCBI Entrez settings
+search:
+  max_results: 100
+  timeout: 30
+  email: "user@example.com"   # REQUIRED by NCBI — replace with your email
+  api_key: ""                 # Optional: NCBI API key for 10 req/sec
+
+# ENA Browser API
+ena:
+  base_url: "https://www.ebi.ac.uk/ena/browser/api"
+
+# Output settings
+export:
+  default_format: "xlsx"
+  output_dir: "./output"
