@@ -1,4 +1,4 @@
-"""Tests for skin_microbiome_skill v0.3.0 — ELink-aware pipeline."""
+"""Tests for skin_microbiome_skill v0.4.0 — Boolean keyword + scoring."""
 
 import os
 import json
@@ -202,6 +202,19 @@ def entrez_mock():
 
 
 @pytest.fixture
+def species_terms():
+    return {
+        "canonical": "Equus caballus",
+        "common": "Horse",
+        "synonyms": [],
+        "genera": [],
+        "parent_terms": ["Perissodactyla", "Mammalia"],
+        "all": ["horse", "horses", "Equus caballus", "Perissodactyla", "Mammalia"],
+        "boolean_clause": '("horse" OR "horses" OR "Equus caballus" OR "Perissodactyla" OR "Mammalia")',
+    }
+
+
+@pytest.fixture
 def search_engine():
     return SearchEngine({
         "search": {"max_results": 100, "timeout": 30, "email": "test@test.com"},
@@ -333,7 +346,7 @@ class TestSpeciesNormalization:
 class TestSearchEngine:
 
     def test_search_returns_articles(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         assert isinstance(articles, list)
         assert len(articles) >= 1
         for art in articles:
@@ -342,51 +355,51 @@ class TestSearchEngine:
             assert "bioproject_ids" in art
 
     def test_human_patients_excluded(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         pmids = [a["pmid"] for a in articles]
         assert "40000003" not in pmids, "Human patient article must be excluded"
 
     def test_non_skin_excluded(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         pmids = [a["pmid"] for a in articles]
         assert "40000004" not in pmids, "Gut microbiota article must be excluded"
 
     def test_skin_articles_present(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         pmids = [a["pmid"] for a in articles]
         assert "40000001" in pmids
         assert "40000005" in pmids
 
     def test_elink_bioproject_assignment(self, entrez_mock, search_engine):
         """ELink should assign PRJNA123456 to article 40000001."""
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         art1 = next((a for a in articles if a["pmid"] == "40000001"), None)
         assert art1 is not None
         assert "PRJNA123456" in art1["bioproject_ids"]
 
     def test_elink_empty_bioproject(self, entrez_mock, search_engine):
         """Article 40000002 has no BioProject via ELink."""
-        articles = search_engine.search(species_latin="Mus musculus")
+        articles = search_engine.search(species_terms=species_terms)
         art2 = next((a for a in articles if a["pmid"] == "40000002"), None)
         assert art2 is not None
         assert art2["bioproject_ids"] == []
 
     def test_sampling_site_extraction(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Equus caballus")
+        articles = search_engine.search(species_terms=species_terms)
         art1 = next((a for a in articles if a["pmid"] == "40000001"), None)
         assert art1 is not None
         assert art1["sampling_site"] != "N/A"
         assert art1["sampling_site"] in ("Ear", "Axilla", "Groin")
 
     def test_sampling_site_n_a(self, entrez_mock, search_engine):
-        articles = search_engine.search(species_latin="Mus musculus")
+        articles = search_engine.search(species_terms=species_terms)
         art2 = next((a for a in articles if a["pmid"] == "40000002"), None)
         assert art2 is not None
         assert art2["sampling_site"] != "N/A"
 
     def test_search_with_extra_keywords(self, entrez_mock, search_engine):
         articles = search_engine.search(
-            species_latin="Equus caballus",
+            species_terms=species_terms,
             extra_keywords="dermatitis",
         )
         assert isinstance(articles, list)
@@ -569,7 +582,7 @@ class TestIntegration:
 
     def test_search_delegates(self, entrez_mock):
         skill = SkinMicrobiomeSkill(config_path="config.yaml")
-        results = skill.search(species_latin="Equus caballus")
+        results = skill.search(species_terms=species_terms)
         assert isinstance(results, list)
         assert len(results) >= 1
 

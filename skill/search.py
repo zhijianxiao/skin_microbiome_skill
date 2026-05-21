@@ -1,10 +1,13 @@
-"""PubMed search for non-human skin microbiome with ELink cross-database navigation.
+"""PubMed search for non-human skin microbiome with Boolean keyword query + relevance scoring.
 
-Patterns adopted from bioSkills database-access:
-  - entrez-search:  field-tag query syntax, history server, pagination
-  - entrez-link:    cross-database navigation (PubMed → BioProject, PubMed → SRA)
-  - entrez-fetch:   ESummary for quick metadata, EFetch for full records
-  - sra-data:       SRA accession hierarchy
+Query structure:
+  (species_terms...) AND (skin OR dermal OR cutaneous OR epidermal)
+  AND (microbiome OR microbiota OR "microbial community") NOT human
+
+Relevance scoring:
+  +1.0  species name in title/abstract
+  +0.5  skin-related terms in title/abstract
+  +0.5  microbiome-related terms in title/abstract
 """
 
 import re
@@ -13,12 +16,17 @@ import time
 from Bio import Entrez
 from Bio.Entrez import HTTPError
 
-# ── Constants ──────────────────────────────────────────────────────────
+# ── Term sets ──────────────────────────────────────────────────────────
 _SKIN_TERMS = [
     "skin", "cutaneous", "dermal", "dermis", "epidermal", "epidermis",
     "dermatitis", "dermatology", "dermatological", "eczema", "atopic",
-    "seborrheic", "sebaceous", "keratinocyte", "melanocyte", "hair follicle",
-    "sweat gland", "sebum",
+    "seborrheic", "sebaceous", "keratinocyte", "melanocyte",
+]
+
+_MICROBIOME_TERMS = [
+    "microbiome", "microbiota", "microbial community", "microbial communities",
+    "bacterial community", "bacterial communities", "fungal community",
+    "fungal communities", "mycobiome", "virome", "metagenomic",
 ]
 
 _HUMAN_EXCLUSIVE = [
@@ -32,48 +40,37 @@ _SAMPLING_SITE_PATTERNS = [
     (r"\b(cheek|cheeks|buccal|malar)\b", "Cheek"),
     (r"\b(forehead|frontal)\b", "Forehead"),
     (r"\b(scalp|scalps)\b", "Scalp"),
-    (r"\b(chin|mental region)\b", "Chin"),
-    (r"\b(periocular|periocular|eyelid|eyelids|periorbital)\b", "Periocular"),
     (r"\b(axilla|axillae|armpit|axillary)\b", "Axilla"),
     (r"\b(neck|cervical|nape)\b", "Neck"),
     (r"\b(shoulder|shoulders|deltoid)\b", "Shoulder"),
-    (r"\b(back|dorsal trunk|upper back|lower back|interscapular)\b", "Back"),
+    (r"\b(back|dorsal trunk|interscapular)\b", "Back"),
     (r"\b(chest|thoracic|sternal|pectoral)\b", "Chest"),
     (r"\b(abdomen|abdominal|belly|ventral)\b", "Abdomen"),
-    (r"\b(groin|inguinal|inguinal region)\b", "Groin"),
+    (r"\b(groin|inguinal)\b", "Groin"),
     (r"\b(perineum|perineal|perianal|anal)\b", "Perineum"),
-    (r"\b(buttock|buttocks|gluteal)\b", "Buttock"),
-    (r"\b(forearm|volar forearm|antecubital|antecubital fossa)\b", "Forearm"),
-    (r"\b(upper arm|arm|brachial)\b", "Upper arm"),
-    (r"\b(hand|hands|palmar|dorsal hand|interdigital)\b", "Hand"),
-    (r"\b(finger|fingers|fingertip|fingernail)\b", "Finger"),
+    (r"\b(forearm|volar forearm|antecubital)\b", "Forearm"),
+    (r"\b(upper arm|brachial)\b", "Upper arm"),
+    (r"\b(hand|hands|palmar|interdigital)\b", "Hand"),
     (r"\b(thigh|thighs|femoral)\b", "Thigh"),
-    (r"\b(calf|calves|sural|lower leg|popliteal|popliteal fossa)\b", "Calf"),
-    (r"\b(foot|feet|plantar|dorsal foot|toe|toes|interdigital foot)\b", "Foot"),
+    (r"\b(calf|calves|sural|lower leg|popliteal)\b", "Calf"),
+    (r"\b(foot|feet|plantar|toe|toes)\b", "Foot"),
     (r"\b(paw|paws|footpad|footpads)\b", "Paw"),
-    (r"\b(tail|tail base|tail skin|rump|withers)\b", "Tail"),
-    (r"\b(mane|mane region)\b", "Mane"),
-    (r"\b(fetlock|pastern|coronet|hoof)\b", "Hoof"),
-    (r"\b(udder|teat|teats|mammary)\b", "Udder"),
-    (r"\b(comb|wattle|wattles)\b", "Comb/Wattle"),
-    (r"\b(wing|wings|wing web)\b", "Wing"),
-    (r"\b(fin|fins|scale|scales|operculum)\b", "Fin"),
-    (r"\b(oral cavity|oral|tongue|buccal mucosa|gingival|gingiva)\b", "Oral"),
-    (r"\b(vaginal|vagina|cervicovaginal|vulvar|vulval)\b", "Vaginal"),
-    (r"\b(conjunctiva|conjunctival|corneal|cornea)\b", "Conjunctival"),
-    (r"\b(gut|intestinal|fecal|faecal|stool|colon|colonic)\b", "Gut"),
-    (r"\b(respiratory|lung|pulmonary|bronchial|tracheal|nasopharyn)\b", "Respiratory"),
+    (r"\b(tail|tail base|rump)\b", "Tail"),
+    (r"\b(fin|fins|dorsal fin|pectoral fin|pelvic fin|caudal fin)\b", "Fin"),
+    (r"\b(gill|gills|branchial|opercular|operculum)\b", "Gill"),
+    (r"\b(scale|scales|dermal denticle|denticles|placoid)\b", "Scale"),
+    (r"\b(snout|rostrum|rostral)\b", "Snout"),
+    (r"\b(mouth|oral|buccal|jaw|jaws|mandibular)\b", "Mouth"),
+    (r"\b(clasper|claspers)\b", "Clasper"),
 ]
 
 
-# ── PubMed record parsing ──────────────────────────────────────────────
+# ── PubMed record parser ───────────────────────────────────────────────
 def _parse_medline(record: dict) -> dict:
-    """Parse Entrez.read() PubMed XML record into flat dict."""
     art = {}
     try:
         medline = record.get("MedlineCitation", record)
         a = medline.get("Article", {})
-
         art["pmid"] = str(medline.get("PMID", ""))
         art["title"] = a.get("ArticleTitle", "")
 
@@ -81,10 +78,9 @@ def _parse_medline(record: dict) -> dict:
         if isinstance(authors, list):
             names = []
             for au in authors:
-                last = au.get("LastName", "")
-                fore = au.get("ForeName", "")
-                if last:
-                    names.append(f"{last} {fore}".strip())
+                ln, fn = au.get("LastName", ""), au.get("ForeName", "")
+                if ln:
+                    names.append(f"{ln} {fn}".strip())
             art["authors"] = "; ".join(names[:10])
             if len(names) > 10:
                 art["authors"] += " et al."
@@ -112,21 +108,18 @@ def _parse_medline(record: dict) -> dict:
             art["abstract"] = " ".join(str(p) for p in ap)
         else:
             art["abstract"] = ""
-
     except Exception:
         pass
     return art
 
 
-# ── SearchEngine ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
 class SearchEngine:
-    """PubMed search + ELink cross-database navigation for non-human skin microbiome.
+    """PubMed search with Boolean keyword query + relevance scoring.
 
-    Key patterns from bioSkills:
-      - ESearch with [title/abstract] field tags and usehistory='y'
-      - ELink dbfrom='pubmed' → db='bioproject' / 'sra' / 'biosample'
-      - ESummary for quick BioProject metadata
-      - Batch linking: pass comma-joined PMIDs to ELink
+    Query: (species_terms) AND (skin_terms) AND (microbiome_terms) NOT human
+
+    Score: species_match * 1.0 + skin_match * 0.5 + microbiome_match * 0.5
     """
 
     def __init__(self, config: dict):
@@ -143,99 +136,141 @@ class SearchEngine:
     # ── public API ─────────────────────────────────────────────────────
     def search(
         self,
-        species_latin: str,
+        species_terms: dict,
         extra_keywords: str = "",
         max_results: int = None,
     ) -> list[dict]:
-        """PubMed search → secondary filter → ELink BioProject/SRA → sampling site.
+        """Search PubMed for non-human skin microbiome.
 
-        Query (field-tag syntax from bioSkills entrez-search):
-          ("skin microbiome"[title/abstract] OR "cutaneous microbiota"[title/abstract]
-           OR "dermal microbiome"[title/abstract])
-          AND ("{species_latin}") NOT human[mesh]
+        Args:
+          species_terms: dict from SpeciesManager.expand_search_terms()
+                         must contain 'boolean_clause' and 'all' keys.
+          extra_keywords: optional extra search terms
+          max_results: override configured max results
+
+        Returns list of article dicts sorted by relevance_score descending.
         """
         max_n = max_results or self.max_results
 
-        # ── 1. Build query (field-tag pattern) ─────────────────────────
-        query = self._build_query(species_latin, extra_keywords)
+        # 1) Build Boolean keyword query
+        query = self._build_query(species_terms, extra_keywords)
 
-        # ── 2. ESearch (history server pattern for large sets) ──────────
+        # 2) ESearch
         pmids = self._esearch(query, max_n)
         if not pmids:
             return []
 
-        # ── 3. EFetch articles (medline XML) ───────────────────────────
+        # 3) EFetch
         articles = self._efetch(pmids)
 
-        # ── 4. Secondary filter: non-human skin ────────────────────────
+        # 4) Secondary filter (non-human, skin-related)
         articles = self._filter_non_human_skin(articles)
 
-        # ── 5. Extract sampling sites ──────────────────────────────────
+        # 5) Score each article
+        search_terms = species_terms.get("all", [])
+        for art in articles:
+            art["relevance_score"] = round(
+                self._score_article(art, search_terms), 1
+            )
+
+        # 6) Sort by score descending
+        articles.sort(key=lambda a: a.get("relevance_score", 0), reverse=True)
+
+        # 7) Extract sampling sites
         for art in articles:
             art["sampling_site"] = self.extract_sampling_site(art)
 
-        # ── 6. ELink: PubMed → BioProject (cross-database pattern) ─────
-        pmid_bioproject_map = self._elink_pubmed_to_bioproject(
-            [a["pmid"] for a in articles]
-        )
-
-        # ── 7. Assign BioProject IDs to articles ───────────────────────
+        # 8) BioProject: regex extraction (does not depend on taxon_id)
         for art in articles:
-            art["bioproject_ids"] = pmid_bioproject_map.get(art["pmid"], [])
+            art["bioproject_ids"] = self.extract_bioproject_ids(art)
 
         return articles
 
     # ── query builder ──────────────────────────────────────────────────
-    def _build_query(self, species_latin: str, extra_keywords: str = "") -> str:
-        """Build field-tagged PubMed query per bioSkills entrez-search syntax."""
+    def _build_query(self, species_terms: dict, extra_keywords: str = "") -> str:
+        """Build Boolean keyword PubMed query.
+
+        Result pattern:
+          (species_clause) AND (skin OR dermal OR ...)
+          AND (microbiome OR microbiota OR ...) NOT human
+        """
+        species_clause = species_terms.get("boolean_clause", "")
+
         skin_clause = (
-            '("skin microbiome"[title/abstract] OR "cutaneous microbiota"[title/abstract]'
-            ' OR "dermal microbiome"[title/abstract] OR "skin microbiota"[title/abstract]'
-            ' OR "skin bacterial community"[title/abstract]'
-            ' OR "skin fungal community"[title/abstract])'
+            "(skin OR dermal OR cutaneous OR epidermal OR dermatitis)"
         )
-        species_clause = f'("{species_latin}")'
-        query = f"{skin_clause} AND {species_clause} NOT human[mesh]"
+        micro_clause = (
+            '(microbiome OR microbiota OR "microbial community"'
+            ' OR "microbial communities" OR metagenomic)'
+        )
+        query = f"{species_clause} AND {skin_clause} AND {micro_clause} NOT human"
 
         if extra_keywords:
             query = f"({query}) AND ({extra_keywords})"
 
         return query
 
-    # ── ESearch ────────────────────────────────────────────────────────
+    # ── relevance scoring ──────────────────────────────────────────────
+    def _score_article(self, article: dict, species_terms: list[str]) -> float:
+        """Score an article by keyword presence in title + abstract.
+
+        Scoring rules:
+          +1.0  per species term match in title,  +0.3 in abstract
+          +0.5  per skin term match in title,     +0.2 in abstract
+          +0.5  per microbiome term match in title, +0.2 in abstract
+        """
+        title = (article.get("title") or "").lower()
+        abstract = (article.get("abstract") or "").lower()
+
+        score = 0.0
+
+        # Species terms (genera, common names, scientific names)
+        for term in species_terms:
+            t = term.lower()
+            if t in title:
+                score += 1.0
+            if t in abstract:
+                score += 0.3
+
+        # Skin terms
+        for term in _SKIN_TERMS:
+            if term in title:
+                score += 0.5
+            if term in abstract:
+                score += 0.2
+
+        # Microbiome terms
+        for term in _MICROBIOME_TERMS:
+            if term in title:
+                score += 0.5
+            if term in abstract:
+                score += 0.2
+
+        return min(score, 100.0)
+
+    # ── ESearch / EFetch ───────────────────────────────────────────────
     def _esearch(self, query: str, max_n: int) -> list[str]:
-        """Run ESearch with pagination (pattern from entrez-search)."""
         try:
             handle = Entrez.esearch(
-                db="pubmed",
-                term=query,
-                retmax=max_n,
-                retmode="json",
-                usehistory="n",
+                db="pubmed", term=query, retmax=max_n, retmode="json",
             )
             result = Entrez.read(handle)
             handle.close()
             return result.get("IdList", [])
         except HTTPError as e:
             print(f"[WARN] PubMed ESearch failed: {e}")
-            print(f"       Query was: {query}")
             return []
 
-    # ── EFetch ─────────────────────────────────────────────────────────
     def _efetch(self, pmids: list[str]) -> list[dict]:
-        """Batch EFetch with medline XML (pattern from entrez-fetch)."""
         if not pmids:
             return []
         articles = []
-        batch_size = 50
-        for i in range(0, len(pmids), batch_size):
-            batch = pmids[i : i + batch_size]
+        for i in range(0, len(pmids), 50):
+            batch = pmids[i : i + 50]
             try:
                 handle = Entrez.efetch(
-                    db="pubmed",
-                    id=",".join(batch),
-                    rettype="medline",
-                    retmode="xml",
+                    db="pubmed", id=",".join(batch),
+                    rettype="medline", retmode="xml",
                 )
                 records = Entrez.read(handle)
                 handle.close()
@@ -243,88 +278,52 @@ class SearchEngine:
                     articles.append(_parse_medline(rec))
             except HTTPError as e:
                 print(f"[WARN] PubMed EFetch failed: {e}")
-            time.sleep(0.34)  # NCBI rate limit
+            time.sleep(0.34)
         return articles
 
-    # ── ELink: PubMed → BioProject (key pattern from entrez-link) ──────
+    # ── ELink: PubMed → BioProject ─────────────────────────────────────
     def _elink_pubmed_to_bioproject(self, pmids: list[str]) -> dict[str, list[str]]:
-        """Use ELink to find BioProject IDs linked to PubMed articles.
-
-        Pattern from bioSkills entrez-link: batch_link() with
-        dbfrom='pubmed', db='bioproject'.
-        Falls back to text-based regex extraction.
-
-        Returns {pmid: [PRJNAxxx, PRJEBxxx, ...]}
-        """
         results = {pmid: [] for pmid in pmids}
         if not pmids:
             return results
-
         try:
-            # Batch ELink: all PMIDs at once (entrez-link pattern)
             handle = Entrez.elink(
-                dbfrom="pubmed",
-                db="bioproject",
-                id=",".join(pmids),
+                dbfrom="pubmed", db="bioproject", id=",".join(pmids),
             )
             record = Entrez.read(handle)
             handle.close()
-
-            # Each linkset corresponds to one input PMID
             for linkset in record:
-                source_id = linkset["IdList"][0] if linkset.get("IdList") else ""
+                sid = linkset["IdList"][0] if linkset.get("IdList") else ""
                 linked = []
                 for db in linkset.get("LinkSetDb", []):
                     linked.extend(link["Id"] for link in db.get("Link", []))
-                if source_id in results:
-                    results[source_id] = linked
-
+                if sid in results:
+                    results[sid] = linked
         except HTTPError as e:
             print(f"[WARN] ELink PubMed→BioProject failed: {e}")
-
         return results
 
     def _elink_pubmed_to_sra(self, pmids: list[str]) -> dict[str, list[str]]:
-        """ELink PubMed → SRA to find linked SRA experiments/runs.
-
-        Pattern from bioSkills: entrez-link + sra-data accession hierarchy.
-        """
         results = {pmid: [] for pmid in pmids}
         if not pmids:
             return results
-
         try:
             handle = Entrez.elink(dbfrom="pubmed", db="sra", id=",".join(pmids))
             record = Entrez.read(handle)
             handle.close()
-
             for linkset in record:
-                source_id = linkset["IdList"][0] if linkset.get("IdList") else ""
+                sid = linkset["IdList"][0] if linkset.get("IdList") else ""
                 linked = []
                 for db in linkset.get("LinkSetDb", []):
                     linked.extend(link["Id"] for link in db.get("Link", []))
-                if source_id in results:
-                    results[source_id] = linked
+                if sid in results:
+                    results[sid] = linked
         except HTTPError as e:
             print(f"[WARN] ELink PubMed→SRA failed: {e}")
-
         return results
-
-    # ── BioProject resolution via ESummary (entrez-fetch pattern) ──────
-    def resolve_bioproject_title(self, bioproject_id: str) -> str:
-        """Get BioProject title via ESummary (entrez-fetch pattern)."""
-        try:
-            handle = Entrez.esummary(db="bioproject", id=bioproject_id)
-            summary = Entrez.read(handle)
-            handle.close()
-            s = summary[0] if isinstance(summary, list) else summary
-            return str(s.get("title", s.get("Project_Title", "")))
-        except Exception:
-            return "N/A"
 
     # ── secondary filter ───────────────────────────────────────────────
     def _filter_non_human_skin(self, articles: list[dict]) -> list[dict]:
-        """Keep only articles mentioning skin terms AND NOT human subjects."""
         filtered = []
         for art in articles:
             text = (
@@ -344,18 +343,15 @@ class SearchEngine:
             (article.get("title") or "").lower() + " "
             + (article.get("abstract") or "").lower()
         )
-        best = None
-        best_len = 0
-        for pat, site_name in _SAMPLING_SITE_PATTERNS:
+        best, best_len = None, 0
+        for pat, site in _SAMPLING_SITE_PATTERNS:
             matches = re.findall(pat, text, re.IGNORECASE)
             if matches and len(matches) > best_len:
-                best_len = len(matches)
-                best = site_name
+                best_len, best = len(matches), site
         return best or "N/A"
 
-    # ── legacy: text-based BioProject extraction (fallback) ────────────
+    # ── BioProject extraction (text-based, taxon-independent) ──────────
     def extract_bioproject_ids(self, article: dict) -> list[str]:
-        """Regex fallback for BioProject ID extraction."""
         text = (
             (article.get("title") or "") + " "
             + (article.get("abstract") or "")
@@ -366,16 +362,24 @@ class SearchEngine:
         return sorted(ids)
 
     def extract_ena_ids(self, article: dict) -> list[str]:
-        """Regex extraction of all ENA/SRA accessions."""
         text = (
             (article.get("title") or "") + " "
             + (article.get("abstract") or "")
         )
-        patterns = [
+        ids = set()
+        for pat in [
             r"[ES]R[A-Z]\d{4,}", r"PRJ[A-Z]{2}\d+",
             r"SAM[NED]A?\d+", r"ERS\d+", r"SRS\d+",
-        ]
-        ids = set()
-        for pat in patterns:
+        ]:
             ids.update(re.findall(pat, text))
         return sorted(ids)
+
+    def resolve_bioproject_title(self, bioproject_id: str) -> str:
+        try:
+            handle = Entrez.esummary(db="bioproject", id=bioproject_id)
+            summary = Entrez.read(handle)
+            handle.close()
+            s = summary[0] if isinstance(summary, list) else summary
+            return str(s.get("title", s.get("Project_Title", "")))
+        except Exception:
+            return "N/A"
