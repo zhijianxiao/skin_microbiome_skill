@@ -180,9 +180,10 @@ class SearchEngine:
         for art in articles:
             art["sampling_site"] = self.extract_sampling_site(art)
 
-        # 8) BioProject: regex extraction (does not depend on taxon_id)
+        # 8) BioProject: NCBI species-based search (NOT article-text regex)
+        bioproject_ids = self.search_bioprojects_by_species(species_terms)
         for art in articles:
-            art["bioproject_ids"] = self.extract_bioproject_ids(art)
+            art["bioproject_ids"] = bioproject_ids
 
         return articles
 
@@ -350,7 +351,89 @@ class SearchEngine:
                 best_len, best = len(matches), site
         return best or "N/A"
 
-    # ── BioProject extraction (text-based, taxon-independent) ──────────
+    # ── NCBI BioProject search by species ──────────────────────────────
+    def search_bioprojects_by_species(self, species_terms: dict) -> list[str]:
+        """Search NCBI BioProject for datasets linked to the species.
+
+        Queries BioProject DB with organism name, then filters for
+        skin/microbiome-related projects. Falls back to SRA DB search.
+        Returns list of BioProject accession IDs (PRJNA/PRJEB/PRJDB).
+        """
+        latin = species_terms.get("canonical", "")
+        if not latin:
+            return ["N/A"]
+
+        # Primary: search BioProject database
+        try:
+            handle = Entrez.esearch(
+                db="bioproject",
+                term=f'"{latin}"[orgn]',
+                retmax=20, retmode="json",
+            )
+            record = Entrez.read(handle)
+            handle.close()
+            bp_ids = record.get("IdList", [])
+
+            if bp_ids:
+                handle = Entrez.esummary(
+                    db="bioproject",
+                    id=",".join(bp_ids[:10]),
+                    retmode="json",
+                )
+                summaries = Entrez.read(handle)
+                handle.close()
+
+                # Prioritize skin/microbiome projects
+                results = []
+                other = []
+                for bid in bp_ids[:10]:
+                    if bid in summaries:
+                        info = summaries[bid]
+                        title = str(info.get("project_title", "") or info.get("title", ""))
+                        acc = str(info.get("project_acc", bid))
+                        if any(kw in title.lower() for kw in
+                               ("skin", "microbiome", "microbiota", "mucus",
+                                "epidermal", "cutaneous", "metagenom")):
+                            results.append(acc)
+                        else:
+                            other.append(acc)
+
+                results.extend(other)
+                results = [r for r in results if r][:8]
+                if results:
+                    return results
+        except Exception:
+            pass
+
+        # Fallback: search SRA database
+        try:
+            handle = Entrez.esearch(
+                db="sra",
+                term=f'"{latin}"[orgn] AND (skin OR microbiome OR metagenom)',
+                retmax=10, retmode="json",
+            )
+            record = Entrez.read(handle)
+            handle.close()
+            sra_ids = record.get("IdList", [])
+
+            if sra_ids:
+                handle = Entrez.esummary(db="sra", id=",".join(sra_ids[:5]))
+                summaries = Entrez.read(handle)
+                handle.close()
+                results = []
+                for uid in sra_ids[:5]:
+                    info = summaries[int(uid)] if uid.isdigit() else {}
+                    bp = str(info.get("bioproject", "") or info.get("BioProject", ""))
+                    if bp and bp not in results:
+                        results.append(bp)
+                if results:
+                    return results[:8]
+        except Exception:
+            pass
+
+        return ["N/A"]
+
+    # ── BioProject extraction (text-based, legacy fallback) ────────────
     def extract_bioproject_ids(self, article: dict) -> list[str]:
         text = (
             (article.get("title") or "") + " "

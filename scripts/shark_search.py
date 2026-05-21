@@ -3,7 +3,8 @@
 Boolean keyword query + NCBI Taxonomy term expansion + relevance scoring.
 Only uses Python stdlib — generates real .xlsx via ZIP + XML.
 """
-import ssl, json, re, time, urllib.request, urllib.parse, zipfile
+import ssl, json, re, sys, time, urllib.request, urllib.parse, zipfile
+sys.stdout.reconfigure(encoding="utf-8")
 from pathlib import Path
 from datetime import datetime
 from xml.etree import ElementTree as ET
@@ -57,8 +58,8 @@ _SAMPLING_SITE_PATTERNS = [
     (r"\b(clasper|claspers)\b", "Clasper"),
 ]
 
-COLUMNS = ["文献标题", "作者", "年份", "DOI", "实验物种", "宏基因组数据集", "取样部位"]
-COL_WIDTHS = [52, 28, 8, 26, 22, 30, 18]
+COLUMNS = ["文献标题","作者","年份","DOI","实验物种","宏基因组数据集","取样部位","相关度评分"]
+COL_WIDTHS = [52,28,8,26,22,32,18,10]
 
 
 # ── NCBI E-utilities ──────────────────────────────────────────────────
@@ -207,8 +208,44 @@ boolean_clause = "(" + " OR ".join(f'"{t}"' for t in all_terms) + ")"
 print(f"  Terms ({len(all_terms)}): {', '.join(all_terms[:10])}…")
 print(f"  Boolean clause: {boolean_clause[:120]}…")
 
-# ── [2] PubMed search ─────────────────────────────────────────────────
-print(f"\n[2/6] PubMed search…")
+# ── NCBI BioProject search by species ────────────────────────────────
+print(f"\n[2/7] NCBI BioProject search for '{species_latin}'…")
+all_bioprojects = []
+try:
+    r = eutils("esearch", {"db":"bioproject","term":f'"{species_latin}"[orgn]',"retmax":"20","retmode":"json"})
+    bp_ids = json.loads(r).get("esearchresult",{}).get("idlist",[])
+    if bp_ids:
+        r = eutils("esummary", {"db":"bioproject","id":",".join(bp_ids[:10]),"retmode":"json"})
+        bp_data = json.loads(r).get("result",{})
+        results = []; other = []
+        for bid in bp_ids[:10]:
+            info = bp_data.get(bid,{})
+            title = str(info.get("project_title","") or info.get("title",""))
+            acc = str(info.get("project_acc",bid))
+            if any(kw in title.lower() for kw in ("skin","microbiome","microbiota","mucus","epidermal","cutaneous","metagenom")):
+                results.append(acc)
+            else: other.append(acc)
+        results.extend(other)
+        all_bioprojects = [r for r in results if r][:8]
+    if not all_bioprojects:
+        # Fallback: SRA
+        r = eutils("esearch", {"db":"sra","term":f'"{species_latin}"[orgn] AND (skin OR microbiome OR metagenom)',"retmax":"10","retmode":"json"})
+        sra_ids = json.loads(r).get("esearchresult",{}).get("idlist",[])
+        if sra_ids:
+            r = eutils("esummary", {"db":"sra","id":",".join(sra_ids[:5]),"retmode":"json"})
+            sra_data = json.loads(r).get("result",{})
+            for sid in sra_ids[:5]:
+                info = sra_data.get(sid,{})
+                bp = str(info.get("bioproject","") or info.get("BioProject",""))
+                if bp and bp not in all_bioprojects: all_bioprojects.append(bp)
+            all_bioprojects = all_bioprojects[:8]
+    print(f"  → {len(all_bioprojects)} skin/microbiome BioProjects found")
+except Exception as e:
+    print(f"  → NCBI search failed: {e}")
+    all_bioprojects = ["N/A"]
+
+# ── [3] PubMed search ────────────────────────────────────────────────
+print(f"\n[3/7] PubMed search…")
 query = (f'{boolean_clause} AND (skin OR dermal OR cutaneous OR epidermal)'
          f' AND (microbiome OR microbiota OR "microbial community" OR metagenomic)'
          f' NOT human')
@@ -219,7 +256,7 @@ pmids = json.loads(resp).get("esearchresult", {}).get("idlist", [])
 print(f"  → {len(pmids)} articles")
 
 # ── [3] Fetch details ─────────────────────────────────────────────────
-print(f"\n[3/6] Fetching article details…")
+print(f"\n[4/7] Fetching article details…")
 articles = []
 for i in range(0, len(pmids), 20):
     batch = pmids[i:i+20]
@@ -256,7 +293,7 @@ for i in range(0, len(pmids), 20):
 print(f"  → {len(articles)} fetched")
 
 # ── [4] Filter + score ────────────────────────────────────────────────
-print(f"\n[4/6] Filtering + relevance scoring (Boolean keyword)…")
+print(f"\n[5/7] Filtering + relevance scoring (Boolean keyword)…")
 filtered = []
 for art in articles:
     title = (art.get("title") or "").lower()
@@ -291,10 +328,8 @@ for art in articles:
     art["sampling_site"] = best or "N/A"
 
     # BioProject
-    bp_ids = set()
-    for pat in [r"PRJNA\d{4,}", r"PRJEB\d{4,}", r"PRJDB\d{4,}"]:
-        bp_ids.update(re.findall(pat, art.get("title", "") + " " + art.get("abstract", "")))
-    art["bioproject_ids"] = sorted(bp_ids)
+    # BioProject from NCBI species search (set below)
+    art["bioproject_ids"] = all_bioprojects
     art["species"] = species_latin
     filtered.append(art)
 
@@ -302,7 +337,7 @@ for art in articles:
 filtered.sort(key=lambda a: a.get("relevance_score", 0), reverse=True)
 print(f"  → {len(filtered)}/{len(articles)} after filter")
 
-# ── [5] Preview ───────────────────────────────────────────────────────
+# ── [6] Preview ───────────────────────────────────────────────────────
 print(f"\n{'─' * 80}")
 print(f"  Preview — top {min(15, len(filtered))} of {len(filtered)}  (score|year|site|bioproject)")
 print(f"{'─' * 80}")
@@ -317,7 +352,7 @@ for i, art in enumerate(filtered[:15], 1):
 print(f"{'─' * 80}")
 
 # ── [6] Export .xlsx ──────────────────────────────────────────────────
-print(f"\n[6/6] Exporting Excel (.xlsx) to desktop…")
+print(f"\n[7/7] Exporting Excel (.xlsx) to desktop…")
 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 xlsx_path = DESKTOP / f"Shark_Skin_Microbiome_optimized_{ts}.xlsx"
 
@@ -328,6 +363,7 @@ for art in filtered:
         art.get("title", "N/A"), art.get("authors", "N/A"),
         art.get("year", "N/A"), art.get("doi", "N/A"),
         species_latin, bp_str, art.get("sampling_site", "N/A"),
+        art.get("relevance_score", 0),
     ])
 
 write_xlsx(rows, str(xlsx_path), COL_WIDTHS)

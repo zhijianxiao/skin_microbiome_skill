@@ -1,7 +1,7 @@
 """Export literature data to formatted Excel (.xlsx), CSV, or JSON.
 
-Fixed 7-column output:
-  文献标题 | 作者 | 年份 | DOI | 实验物种 | 宏基因组数据集 | 取样部位
+Fixed 8-column output:
+  文献标题 | 作者 | 年份 | DOI | 实验物种 | 宏基因组数据集 | 取样部位 | 相关度评分
 Missing values → "N/A"
 """
 
@@ -21,6 +21,7 @@ _COLUMNS = [
     ("species",          "实验物种"),
     ("bioproject_ids",   "宏基因组数据集"),
     ("sampling_site",    "取样部位"),
+    ("relevance_score",  "相关度评分"),
 ]
 
 _NA = "N/A"
@@ -33,7 +34,7 @@ _THIN_BORDER = Border(
     left=Side(style="thin"), right=Side(style="thin"),
     top=Side(style="thin"),  bottom=Side(style="thin"),
 )
-_COL_WIDTHS = [52, 28, 8, 26, 22, 30, 18]
+_COL_WIDTHS = [52, 28, 8, 26, 22, 32, 18, 10]
 
 
 class Exporter:
@@ -141,6 +142,10 @@ class Exporter:
         if not species:
             species = _NA
 
+        score = article.get("relevance_score", _NA)
+        if score == "" or score is None:
+            score = _NA
+
         return [
             article.get("title") or _NA,
             article.get("authors") or _NA,
@@ -149,4 +154,5 @@ class Exporter:
             species,
             bio_str,
             article.get("sampling_site") or _NA,
+            score,
         ]
