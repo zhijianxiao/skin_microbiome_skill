@@ -1,8 +1,6 @@
 # Skin Microbiome Skill · 皮肤微生物组文献检索工具
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![bioSkills](https://img.shields.io/badge/patterns-bioSkills-orange)](https://github.com/GPTomics/bioSkills)
 
 **非人类皮肤微生物组文献检索与宏基因组数据集定位工具。**
 
@@ -32,16 +30,16 @@
  取样部位提取（40+ 正则模式）
 ```
 
-### 核心技术栈（参考 bioSkills 模式）
+### 核心技术栈
 
-| 步骤 | 使用的 NCBI Entrez 工具 | 参考的 bioSkills 模块 |
-|------|------------------------|---------------------|
-| 物种标准化 | `esearch(db='taxonomy')` + `esummary` | entrez-search / entrez-fetch |
-| 文献检索 | `esearch(db='pubmed')` 字段标签语法 | entrez-search |
-| 文献获取 | `efetch(rettype='medline', retmode='xml')` | entrez-fetch |
-| 跨库导航 | `elink(dbfrom='pubmed', db='bioproject')` | **entrez-link** |
-| SRA 关联 | `elink(dbfrom='pubmed', db='sra')` | entrez-link / sra-data |
-| 元数据解析 | `esummary(db='bioproject')` | entrez-fetch |
+| 步骤 | 使用的 NCBI Entrez 工具 |
+|------|------------------------|
+| 物种标准化 | `esearch(db='taxonomy')` + `esummary` |
+| 文献检索 | `esearch(db='pubmed')` 字段标签语法 |
+| 文献获取 | `efetch(rettype='medline', retmode='xml')` |
+| 跨库导航 | `elink(dbfrom='pubmed', db='bioproject')` |
+| SRA 关联 | `elink(dbfrom='pubmed', db='sra')` |
+| 元数据解析 | `esummary(db='bioproject')` |
 
 ---
 
@@ -118,7 +116,7 @@ $ skin-microbiome
 ============================================================
   Non-Human Skin Microbiome Literature Search
   Platform: linux
-  Methods: NCBI Entrez + ELink (bioSkills patterns)
+  Methods: NCBI Entrez + ELink
 ============================================================
 
   Species name (Chinese/English, e.g. 马 / mouse): 马
@@ -267,7 +265,6 @@ export:
 ```
 skin_microbiome_skill/
 ├── README.md                   # 本文件
-├── LICENSE                     # MIT 许可证
 ├── .gitignore
 ├── config.yaml                 # NCBI 邮箱、ENA URL、导出设置
 ├── pyproject.toml              # 现代 Python 项目元数据
@@ -361,31 +358,3 @@ pytest tests/test_skill.py --cov=skill --cov-report=term-missing
    "新物种中文名": {"chinese": "...", "english": "...", "latin": "...", "taxon_id": "..."},
    ```
 3. 运行测试验证：`pytest tests/test_skill.py -v`
-
----
-
-## 技术参考
-
-本项目检索逻辑参考了开源项目 [GPTomics/bioSkills](https://github.com/GPTomics/bioSkills) 的 `database-access` 模块：
-
-- **entrez-search**：字段标签查询语法（`[title/abstract]`, `[scin]`, `[comn]`, `[mesh]`）
-- **entrez-fetch**：ESummary 快速元数据 + EFetch 完整记录
-- **entrez-link**：跨数据库导航（`dbfrom='pubmed'` → `db='bioproject'` / `db='sra'`）
-- **sra-data**：SRA 层级结构（SRP > SRX > SRS > SRR）
-
----
-
-## 许可证
-
-本项目采用 **MIT 许可证** — 详见 [LICENSE](LICENSE)。
-
-可自由用于学术研究或商业用途。
-
----
-
-## 参考资料
-
-- [NCBI Entrez Programming Utilities](https://www.ncbi.nlm.nih.gov/books/NBK25501/)
-- [ENA Browser API](https://www.ebi.ac.uk/ena/browser/api)
-- [Biopython 文档](https://biopython.org/docs/)
-- [GPTomics/bioSkills](https://github.com/GPTomics/bioSkills)
