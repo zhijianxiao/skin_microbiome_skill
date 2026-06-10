@@ -263,7 +263,7 @@ def main():
         elif cmd == "search":
             species = sys.argv[2] if len(sys.argv) > 2 else None
             if not species:
-                print("Usage: skin-microbiome search <species> [extra_keywords]")
+                print("Usage: skinmicrobiome search <species> [extra_keywords]")
                 return
             extra = " ".join(sys.argv[3:])
             articles = skill.search(species, extra)

@@ -1,9 +1,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="skin_microbiome_skill",
+    name="skinmicrobiome",
     version="0.1.0",
-    description="A Python skill for searching, analyzing, and exporting skin microbiome species data",
+    description="非人类皮肤微生物组文献检索与宏基因组数据集定位工具",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
@@ -24,7 +24,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "skin-microbiome=skill.main:main",
+            "skinmicrobiome=skill.main:main",
         ],
     },
 )

@@ -45,4 +45,4 @@ Check-Tool "enaBrowserTools"  # enaBrowserTools (enaDataGet / enaGroupGet)
 Write-Host ""
 Write-Host "==> Installation complete."
 Write-Host "Activate with: conda activate $EnvName"
-Write-Host "Run: skin-microbiome"
+Write-Host "Run: skinmicrobiome"

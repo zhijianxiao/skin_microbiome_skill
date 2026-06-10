@@ -37,4 +37,4 @@ check_tool "enaBrowserTools"  # enaBrowserTools (enaDataGet / enaGroupGet)
 echo ""
 echo "==> Installation complete."
 echo "Activate with: conda activate ${ENV_NAME}"
-echo "Run: skin-microbiome"
+echo "Run: skinmicrobiome"

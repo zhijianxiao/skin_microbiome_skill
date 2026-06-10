@@ -1,4 +1,4 @@
-"""skin_microbiome_skill — non-human skin microbiome literature search.
+"""skinmicrobiome — non-human skin microbiome literature search.
 
 Boolean keyword query + relevance scoring + NCBI Taxonomy term expansion.
 """

@@ -66,7 +66,7 @@ COL_WIDTHS = [52,28,8,26,22,32,18,10]
 def eutils(service, params):
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     params["email"] = EMAIL
-    params["tool"] = "skin_microbiome_skill"
+    params["tool"] = "skinmicrobiome"
     qs = urllib.parse.urlencode(params)
     url = f"{base}{service}.fcgi?{qs}"
     time.sleep(0.34)

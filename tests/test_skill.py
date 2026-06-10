@@ -1,4 +1,4 @@
-"""Tests for skin_microbiome_skill v0.4.0 — Boolean keyword + scoring."""
+"""Tests for skinmicrobiome v0.4.0 — Boolean keyword + scoring."""
 
 import os
 import json
