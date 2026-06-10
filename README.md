@@ -19,8 +19,8 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/zhijianxiao/skin_microbiome_skill.git
-cd skin_microbiome_skill
+git clone https://github.com/SkinMicrobe/skinmicrobiome.git
+cd skinmicrobiome
 
 # 2. 运行安装脚本（创建 Conda 环境 + 安装依赖）
 bash scripts/install.sh
@@ -39,8 +39,8 @@ skinmicrobiome
 
 ```powershell
 # 1. 克隆仓库
-git clone https://github.com/zhijianxiao/skin_microbiome_skill.git
-cd skin_microbiome_skill
+git clone https://github.com/SkinMicrobe/skinmicrobiome.git
+cd skinmicrobiome
 
 # 2. 运行安装脚本
 .\scripts\install.ps1
@@ -214,7 +214,7 @@ export:
 ## 项目结构
 
 ```
-skin_microbiome_skill/
+skinmicrobiome/
 ├── config.yaml              # NCBI 邮箱、ENA URL、导出设置
 ├── pyproject.toml           # 项目元数据
 ├── setup.py                 # setuptools 打包
@@ -258,5 +258,5 @@ pytest tests/test_skill.py --cov=skill --cov-report=term-missing
 
 ## 链接
 
-- **仓库**：[github.com/zhijianxiao/skin_microbiome_skill](https://github.com/zhijianxiao/skin_microbiome_skill)
+- **仓库**：[github.com/SkinMicrobe/skinmicrobiome](https://github.com/SkinMicrobe/skinmicrobiome)
 - **问题反馈**：欢迎提交 Issue 和 PR
